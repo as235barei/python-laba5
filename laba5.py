@@ -1,15 +1,95 @@
 import tkinter as tk
-from tkinter import Label, Entry, Button, OptionMenu, Frame, Listbox
+from tkinter import Label, Entry, Button, OptionMenu, Frame, Listbox, simpledialog, filedialog
 from PIL import Image, ImageTk
+import os
+import csv
+import pickle
 
 from classes import Thermometer
 
 
+def save_data(devices):
+    if not os.path.exists("barei"):
+        os.makedirs("barei")
+
+    with open("barei/devices.txt", "w") as file:
+        for device in devices:
+            file.write(
+                f"Name: {device.name}\nTemperature: {device.temperature}\nModel: {device.model}\nBrand: {device.brand}\nUnits: {device.units}\nTemperature History:\n")
+            for temp in device.temperature_history:
+                file.write(f"{temp}\n")
+            file.write("\n\n")
+
+    with open("barei/devices.csv", "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["Name", "Temperature", "Model",
+                        "Brand", "Units", "Temperature History"])
+        for device in devices:
+            history_str = ", ".join(map(str, device.temperature_history))
+            writer.writerow([device.name, device.temperature,
+                            device.model, device.brand, device.units, history_str])
+
+    with open("barei/devices.bin", "wb") as file:
+        pickle.dump(devices, file)
+
+
+def load_data():
+    devices = []
+
+    if os.path.exists("barei/devices.txt"):
+        with open("barei/devices.txt", "r") as file:
+            device_data = file.read().split("\n\n")
+            for data in device_data:
+                if data.strip():  # Check if the line is not empty
+                    try:
+                        # Split the data by "Temperature: " and then by "\n"
+                        device_info = data.split("\nTemperature: ")[
+                            0].split("\n")
+                        if len(device_info) == 5:  # Ensure we have the expected number of fields
+                            name, temperature, model, brand, units = device_info
+                            temperature = float(temperature.split(": ")[1])
+                            model = model.split(": ")[1]
+                            brand = brand.split(": ")[1]
+                            units = units.split(": ")[1]
+                            device = Thermometer(
+                                name, temperature, model, brand, units)
+                            device.temperature_history = list(
+                                map(float, data.split("\nTemperature: ")[1].split("\n")))
+                            devices.append(device)
+                        else:
+                            print(
+                                f"Skipping device with incomplete data: {data}")
+                    except ValueError as e:
+                        print(f"Error parsing device data: {e}")
+
+    if os.path.exists("barei/devices.csv"):
+        with open("barei/devices.csv", "r") as file:
+            reader = csv.reader(file)
+            next(reader)  # Skip title
+            for row in reader:
+                name, temperature, model, brand, units, history_str = row
+                temperature = float(temperature)
+                device = Thermometer(name, temperature, model, brand, units)
+                device.temperature_history = list(
+                    map(float, history_str.split(", ")))
+                devices.append(device)
+
+    if os.path.exists("barei/devices.bin"):
+        with open("barei/devices.bin", "rb") as file:
+            devices = pickle.load(file)
+
+    return devices
+
+
 class Application(tk.Tk):
-    def __init__(self, device):
+    def __init__(self):
         super().__init__()
-        self.device = device
+        self.devices = load_data()  # Read data from files
+        self.current_device_index = 0
+        self.device = self.devices[self.current_device_index] if self.devices else Thermometer(
+            "Default Thermometer")
         self.current_image_index = 0
+
         self.images = [
             ImageTk.PhotoImage(Image.open("./images/air-thermometer.jpg")),
             ImageTk.PhotoImage(Image.open("./images/body-thermometer.jpg")),
@@ -49,7 +129,7 @@ class Application(tk.Tk):
         self.units_options.pack()
 
         self.show_values_button = Button(
-            self, text="Show Values", command=self.display_values)
+            self, text="Set Values", command=self.display_values)
         self.show_values_button.pack()
 
         # work with history_listbox
@@ -94,6 +174,20 @@ class Application(tk.Tk):
             self, image=self.images[self.current_image_index])
         self.image_label.pack()
 
+        # "Device switching" buttons
+        self.prev_device_button = Button(
+            self, text="<< Previous Device", command=lambda: self.switch_device(-1))
+        self.prev_device_button.pack(side=tk.LEFT)
+
+        self.next_device_button = Button(
+            self, text="Next Device >>", command=lambda: self.switch_device(1))
+        self.next_device_button.pack(side=tk.RIGHT)
+
+        # "Create new device" button
+        self.create_device_button = Button(
+            self, text="Create New Device", command=self.create_new_device)
+        self.create_device_button.pack(side=tk.TOP)
+
     def show_next_image(self):
         self.current_image_index = (
             self.current_image_index + 1) % len(self.images)
@@ -118,8 +212,8 @@ class Application(tk.Tk):
         self.device.model = model
         self.device.brand = brand
         self.device.units = units
-        self.info_label.config(text=self.device.display_info())
-        self.update_history_listbox()
+        self.update_device_info()
+        save_data(self.devices)
 
     def execute_history_operation(self, operation):
         if operation == "Add Temperature":
@@ -156,10 +250,33 @@ class Application(tk.Tk):
         for temperature in self.device.temperature_history:
             self.history_listbox.insert(tk.END, str(temperature))
 
+    def update_device_info(self):
+        self.info_label.config(text=self.device.display_info())
+        self.temperature_entry.delete(0, tk.END)
+        self.temperature_entry.insert(0, str(self.device.temperature))
+        self.model_entry.delete(0, tk.END)
+        self.model_entry.insert(0, self.device.model)
+        self.brand_entry.delete(0, tk.END)
+        self.brand_entry.insert(0, self.device.brand)
+        self.units_var.set(self.device.units)
 
-# Створення об'єкта класу Thermometer
-thermometer = Thermometer("Digital Thermometer")
+    def switch_device(self, direction):
+        if self.devices:
+            self.current_device_index = (
+                self.current_device_index + direction) % len(self.devices)
+            self.device = self.devices[self.current_device_index]
+            self.update_device_info()
 
-# Створення та запуск графічного інтерфейсу
-app = Application(thermometer)
+    def create_new_device(self):
+        name = simpledialog.askstring("New Device", "Enter device name:")
+        if name:
+            new_device = Thermometer(name)
+            self.devices.append(new_device)
+            self.device = new_device
+            self.current_device_index = len(self.devices) - 1
+            self.update_device_info()
+            save_data(self.devices)
+
+
+app = Application()
 app.mainloop()
